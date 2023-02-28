@@ -319,9 +319,9 @@ type Processor struct {
 	// Status shall contain any status or health properties
 	// of the resource.
 	Status common.Status
-	// SubProcessors shall be a link to a
+	// subProcessors shall be a link to a
 	// collection of type ProcessorCollection.
-	SubProcessors string
+	subProcessors string
 	// TDPWatts shall be the nominal Thermal
 	// Design Power (TDP) in watts.
 	TDPWatts int
@@ -377,6 +377,7 @@ func (processor *Processor) UnmarshalJSON(b []byte) error {
 		Assembly              common.Link
 		Metrics               common.Link
 		ProcessorMemory       common.Links
+		SubProcessors         common.Link
 		Links                 struct {
 			Chassis                  common.Link
 			ConnectedProcessors      common.Links
@@ -431,6 +432,7 @@ func (processor *Processor) UnmarshalJSON(b []byte) error {
 	processor.pcieFunctions = t.Links.PCIeFunctions.ToStrings()
 	processor.PCIeFunctionsCount = t.Links.PCIeFunctionsCount
 	processor.metrics = t.Metrics.String()
+	processor.subProcessors = t.SubProcessors.String()
 
 	return nil
 }
@@ -531,4 +533,52 @@ type ProcessorMemory struct {
 	MemoryType ProcessorMemoryType
 	// SpeedMHz shall be the operating speed of the memory in MHz.
 	SpeedMHz int
+}
+
+// SubProcessors returns a collection of subprocessors from this system
+func (processor *Processor) SubProcessors() ([]*SubProcessor, error) {
+	return ListReferencedSubProcessors(processor.Client, processor.subProcessors)
+}
+
+// ListReferencedSubProcessors gets the collection of SubProcessor from a provided reference.
+func ListReferencedSubProcessors(c common.Client, link string) ([]*SubProcessor, error) { //nolint:dupl
+	var result []*SubProcessor
+	if link == "" {
+		return result, nil
+	}
+
+	type GetResult struct {
+		Item  *SubProcessor
+		Link  string
+		Error error
+	}
+
+	ch := make(chan GetResult)
+	collectionError := common.NewCollectionError()
+	get := func(link string) {
+		processor, err := GetSubProcessor(c, link)
+		ch <- GetResult{Item: processor, Link: link, Error: err}
+	}
+
+	go func() {
+		err := common.CollectList(get, c, link)
+		if err != nil {
+			collectionError.Failures[link] = err
+		}
+		close(ch)
+	}()
+
+	for r := range ch {
+		if r.Error != nil {
+			collectionError.Failures[r.Link] = r.Error
+		} else {
+			result = append(result, r.Item)
+		}
+	}
+
+	if collectionError.Empty() {
+		return result, nil
+	}
+
+	return result, collectionError
 }
