@@ -81,6 +81,9 @@ type ClientConfig struct {
 	// Insecure controls whether to enforce SSL certificate validity.
 	Insecure bool
 
+	// SingleRequest tells the APIClient if request should be wrapped in mutuxes (true)
+	SingleRequest bool
+
 	// Controls TLS handshake timeout
 	TLSHandshakeTimeout int
 
@@ -128,6 +131,10 @@ func setupClientWithConfig(ctx context.Context, config *ClientConfig) (c *APICli
 		client.HTTPClient = &http.Client{Transport: transport}
 	} else {
 		client.HTTPClient = config.HTTPClient
+	}
+
+	if config.SingleRequest {
+		client.mu = &sync.Mutex{}
 	}
 
 	// Fetch the service root
