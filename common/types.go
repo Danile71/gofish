@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"reflect"
+	"strings"
 )
 
 // DefaultServiceRoot is the default path to the Redfish service endpoint.
@@ -41,6 +42,10 @@ type Entity struct {
 	Name string `json:"Name"`
 	// Client is the REST client interface to the system.
 	Client Client `json:"-"`
+	// etag contains the etag header when fetching the object. This is used to
+	// control updates to make sure the object has not been modified my a different
+	// process between fetching and updating that could cause conflicts.
+	etag string
 }
 
 // SetClient sets the API client connection to use for accessing this
@@ -101,13 +106,61 @@ func (e *Entity) Update(originalEntity, currentEntity reflect.Value, allowedUpda
 	// If there are any allowed updates, try to send updates to the system and
 	// return the result.
 	if len(payload) > 0 {
-		_, err := e.Client.Patch(e.ODataID, payload) //nolint:bodyclose
-		if err != nil {
-			return err
-		}
+		return e.Patch(e.ODataID, payload)
 	}
 
 	return nil
+}
+
+func (e *Entity) etagToHeader() map[string]string {
+	header := make(map[string]string)
+
+	if e.etag != "" {
+		header["If-Match"] = e.etag
+	}
+	return header
+}
+
+func (e *Entity) Get(c Client, uri string, payload interface{}) error {
+	// validate uri
+	if strings.TrimSpace(uri) == "" {
+		return fmt.Errorf("uri should not be empty")
+	}
+
+	resp, err := c.Get(uri)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	err = json.NewDecoder(resp.Body).Decode(payload)
+	if err != nil {
+		return err
+	}
+
+	if resp.Header["Etag"] != nil {
+		e.etag = resp.Header["Etag"][0]
+	}
+	e.SetClient(c)
+	return nil
+}
+
+func (e *Entity) Patch(uri string, payload interface{}) error {
+	header := e.etagToHeader()
+	resp, err := e.Client.PatchWithHeaders(uri, payload, header)
+	if err == nil {
+		return resp.Body.Close()
+	}
+	return err
+}
+
+func (e *Entity) Post(uri string, payload interface{}) error {
+	header := e.etagToHeader()
+	resp, err := e.Client.PostWithHeaders(uri, payload, header)
+	if err == nil {
+		return resp.Body.Close()
+	}
+	return err
 }
 
 // Link is an OData link reference
